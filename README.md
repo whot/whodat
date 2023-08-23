@@ -2,6 +2,9 @@ whodat
 ======
 
 `whodat` is an input device classification database/library/something/other.
+
+**This will most likely be a DBus service that runs outside the sandboxes**
+
 The idea is that given *some* information about a device we can query `whodat`
 to tell us something more about the device with little effort and, more importantly,
 **unified across implementations**. For example, given an evdev or hidraw file
@@ -18,6 +21,31 @@ The goal of `whodat` is to be the generic lookup table used by compositors
 and clients so that both sides always agree on what capabilities a
 device have. Having this as part of a library means we only have a
 single place to maintain this information.
+
+## Implementation as DBus service
+
+If implemented as DBus service, `whodat` can provide full device identification
+even for unprivileged processes. Such a process would get an fd to the (evdev,
+hidraw,...) device via some other channel (wayland, inputfd, portal, ...) an pass
+that fd to the `whodat` DBus service which can identify the actual device using
+`stat(3)`. It can then gather information from udev, ioctls, etc. and provide
+that to the process.
+
+In pseudo-code:
+
+```python
+import whodat
+
+fd: int = obtain_evdev_fd_from_somewhere()
+objpath: string = whodat.DeviceFromEvdev(fd)
+device = whodat.Device.from_objpath(objpath)
+
+if device.has_capability(whodat.Capability.Touchpad):
+    print("This is a touchpad")
+```
+
+Notably: the process itself needs no access to the device beyond what it already
+has.
 
 ## Sharing data with unprivileged processes
 
