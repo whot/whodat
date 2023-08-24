@@ -1,0 +1,14 @@
+[package]
+name = "whodat-daemon"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "whodat-daemon"
+path = "src/main.rs"
+
+[dependencies]
+whodat = { path = "../whodat" }
+zbus = { version = "3.9.0", features = ["xml"] }
+zvariant = { version = "3" }
+async-std = { version = "1.12.0", features = ["attributes"] }

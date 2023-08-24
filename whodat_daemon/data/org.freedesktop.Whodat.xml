@@ -1,0 +1,78 @@
+<?xml version="1.0"?>
+<!-- SPDX-License-Identifier: MIT -->
+<node name="/" xmlns:doc="http://www.freedesktop.org/dbus/1.0/doc.dtd">     ■
+  <!-- 
+    org.freedesktop.Whodat:
+    @short_description: Device identification interface
+
+    An interface to provide device identification for evdev and hidraw devices.
+    This allows a caller with access to a single device to obtain more information
+    about this device that it may otherwise not be privileged enough to access to.
+
+    For example, a game controller may have several evdev event nodes including
+    a touchpad event node. If only the touchpad evdev node is passed to a process,
+    that process cannot be aware that this is part of a gaming device.
+
+    Using whodat it can pass that fd to the whodat daemon which will provide
+    the process to also gather information about the parent device, including that
+    this device is a game controller.
+
+    This interface is available on the `org.freeedesktop.Whodat` session bus
+    on the `/org/freedesktop/whodat` object path.
+  -->
+  <interface name="org.freedesktop.Whodat">
+    <!-- 
+      DeviceFromEvdev:
+      @fd: a file descriptor with at least read capability pointing to an existing /dev/input/event node
+      @o: Object path for the #org.freedesktop.Whodat.Device object that represents this device
+
+      Create a Whodat.Device based on an evdev file descriptor. 
+
+      The returned device may be cached by the daemon, and future calls to
+      this method may return the same object path.
+    -->
+    <method name="DeviceFromEvdev">
+      <arg type="h" name="fd" direction="in" />
+      <arg type="o" name="handle" direction="out"/>
+    </method>
+
+    <!-- 
+      DeviceFromEvdev:
+      @fd: a file descriptor with at least read capability pointing to an existing /dev/hidraw node
+      @o: Object path for the #org.freedesktop.Whodat.Device object that represents this device
+
+      Create a Whodat.Device based on an hidraw file descriptor. 
+
+      The returned device may be cached by the daemon, and future calls to
+      this method may return the same object path.
+    -->
+    <method name="DeviceFromHidraw">
+      <arg type="h" name="fd" direction="in" />
+      <arg type="o" name="handle" direction="out"/>
+    </method>
+
+    <property name="version" type="u" access="read"/>
+  </interface>
+
+  <!-- 
+    org.freedesktop.Whodat.Device:
+    @short_description: Device identification interface
+
+    An interface to provide information about a device connected to the system.
+  -->
+  <interface name="org.freedesktop.Whodat.Device">
+    <property name="version" type="u" access="read"/>
+    <property name="name" type="s" access="read"/>
+    <property name="bus" type="u" access="read"/>
+    <property name="vendor_id" type="u" access="read"/>
+    <property name="product_id" type="u" access="read"/>
+
+    <!--
+        Removed:
+
+        The Removed signal is emitted when the device has been removed from the system.
+    -->
+    <signal name="Removed">
+    </signal>
+  </interface>
+</node>

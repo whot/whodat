@@ -1,4 +1,4 @@
-#![doc = include_str!("../README.md")]
+#![doc = include_str!("../../README.md")]
 #![allow(unused_variables, dead_code)]
 
 use std::error::Error;
