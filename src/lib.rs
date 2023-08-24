@@ -56,7 +56,7 @@ impl Builder {
     pub fn hidraw_fd(&mut self, fd: std::os::fd::RawFd) -> &mut Self {
         self
     }
-    
+
     /// Path to the device's sysfs entry. If this path does not start with `/sys`,
     /// it is automatically prefixed as such.
     pub fn sysfs_path(&mut self, path: &str) -> &mut Self {
@@ -71,7 +71,7 @@ impl Builder {
 }
 
 /// A high-level category describing a capability on this device.
-/// Capabilities are not mutually exclusive (some are, see the documentation) 
+/// Capabilities are not mutually exclusive (some are, see the documentation)
 /// and any device may match one or more of those capbilities.
 ///
 /// The availability of capabilities depends on how the device was
@@ -104,7 +104,7 @@ pub enum Capability {
 ///
 /// The physical type of the device may not always be known, especially if the device
 /// is constructed from a single event node via [`Builder::evdev_fd`]. This crate may
-/// rely on an internal database for well-known devices to supplement the information 
+/// rely on an internal database for well-known devices to supplement the information
 /// where posssible.
 #[non_exhaustive]
 #[derive(Debug)]
@@ -137,7 +137,6 @@ pub enum Application {
 /// The [`Device`] struct represents the device and the queriable
 /// information about this device.
 pub struct Device {}
-
 
 impl Device {
     /// Returns the physical type of this device. Unlike [`Device::has_capability`]
@@ -180,7 +179,7 @@ impl Device {
     /// Create a new device from the data returned by [`Device::serialize`].
     /// This way a caller that has more information about a
     /// device can transmit data through other channels to a different caller and
-    /// that second caller can reliably recreate the information of this 
+    /// that second caller can reliably recreate the information of this
     /// device even without access to the device itself.
     pub fn deserialize(data: &str) -> Result<Self, Box<dyn Error>> {
         Ok(Device {})
