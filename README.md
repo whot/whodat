@@ -51,29 +51,6 @@ if device.has_capability(whodat.Capability.Touchpad):
 Notably: the process itself needs no access to the device beyond what it already
 has.
 
-## Sharing data with unprivileged processes
-
-Two users of `whodat` can share this information. A
-privileged process that e.g. has access to udev may create a device,
-[`Device::serialize`] that device and pass it to the second process.
-That second process, without udev access, can recreate the [`Device`]
-without further information and can thus query for the same classifiers
-as the first process.
-
-```rust
-use whodat::{Builder, Device};
-use std::os::fd::{AsRawFd, RawFd};
-
-if let Ok(fd) = std::fs::File::open("/dev/input/event0") {
-    if let Ok(device) = Builder::new()
-                           .evdev_fd(fd.as_raw_fd())
-                           .build() {
-        let magic_description = device.serialize().unwrap();
-        let other_device = Device::deserialize(magic_description.as_str()).unwrap();
-        // other_device is the same as device
-    }
-}
-```
 ## The device database
 
 `whodat` has an internal database of devices, so some device information

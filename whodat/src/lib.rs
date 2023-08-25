@@ -209,24 +209,6 @@ impl<'a> KernelDevice {
     //     None
     // }
 
-    /// Returns a library-specific dump of this device that can be used to recreate
-    /// the information with [`Device::deserialize`].
-    ///
-    /// The format of this dump is implementation-private and should not be used
-    /// outside users of this crate.
-    pub fn serialize(self) -> Option<String> {
-        None
-    }
-
-    /// Create a new device from the data returned by [`Device::serialize`].
-    /// This way a caller that has more information about a
-    /// device can transmit data through other channels to a different caller and
-    /// that second caller can reliably recreate the information of this
-    /// device even without access to the device itself.
-    pub fn deserialize(data: &str) -> Result<Self, Box<dyn Error>> {
-        Ok(KernelDevice { parent: None })
-    }
-
     // /// Returns a confidence level between `[0.0, 1.0]` on
     // /// how confident we are the classification of this device
     // /// is correct. This is a summary level, individual capabilities
