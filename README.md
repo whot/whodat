@@ -10,16 +10,20 @@ to tell us something more about the device with little effort and, more importan
 **unified across implementations**. For example, given an evdev or hidraw file
 descriptor, we may query whether the device is a mouse or a joystick.
 
-`whodat` differs between the **physical type** and **capabilities**. The physical
-type is what the device would typically be sold as. The capabilities are one or
-more tags of events that the device can produce. For example
+`whodat` differs between the **physical device** and the **kernel device**. The physical
+device represents what the device would typically be interpreted as by the
+user, e.g. a PlayStation controller is a gaming device. The kernel device is what the
+individual file descriptor refers to and it may be a subset of what the device actually is,
+e.g. the PlayStation controllers have an integrated touchpad. The kernel device
+works with capabilities which are
+one or more tags of events that the device can produce. For example
 - mice and touchpads have a [`Capability::Pointer`] capability but their physical type differs,
 - joysticks and racing wheels may have similar capabilities but have different physical types,
 - pointing sticks and mice have different physical types but usually the same capabilities.
 
 The goal of `whodat` is to be the generic lookup table used by compositors
 and clients so that both sides always agree on what capabilities a
-device have. Having this as part of a library means we only have a
+device have. Having this as part of a library/daemon means we only have a
 single place to maintain this information.
 
 ## Implementation as DBus service

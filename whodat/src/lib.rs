@@ -64,15 +64,15 @@ impl Builder {
     }
 
     /// Build the device. If this function returns an error, the provided information
-    /// is insufficient to construct a [`Device`].
-    pub fn build(&self) -> Result<Device, Box<dyn Error>> {
-        Ok(Device {})
+    /// is insufficient to construct a [`KernelDevice`].
+    pub fn build(&self) -> Result<KernelDevice, Box<dyn Error>> {
+        Ok(KernelDevice { parent: None })
     }
 }
 
 /// A high-level category describing a capability on this device.
 /// Capabilities are not mutually exclusive (some are, see the documentation)
-/// and any device may match one or more of those capbilities.
+/// and any device may match one or more of those capabilities.
 ///
 /// The availability of capabilities depends on how the device was
 /// constructed.
@@ -97,6 +97,27 @@ pub enum Capability {
     TabletPad,
 }
 
+/// Describes the primary high-level type of this device.
+///
+/// This is the highest level of categorization and only one of these types
+/// applies to each device. Devices may technically fall into multiple categories
+/// (e.g. many gaming mice can send key events) but this represents the most obvious
+/// category for this device.
+#[non_exhaustive]
+#[derive(Debug)]
+pub enum AbstractType {
+    /// Device is primarily a keyboard
+    Keyboard,
+    /// Device is primarily a pointer device, e.g. a mouse, touchpad, or pointingstick
+    Pointer,
+    /// Device is primarily a touchscreen
+    Touchscreen,
+    /// Device is primarily a graphics tablet
+    Tablet,
+    /// Device is primarily a gaming device, e.g. a joystick, gamepad or racing wheel
+    GamingDevice,
+}
+
 /// Describes the **physical** type of this device. Unlike the [`Device::has_capability`]
 /// a device may only have one physical type. For example, modern PlayStation controllers
 /// provide a touchpad as well as a gamepad - the physical type of this controller however
@@ -108,7 +129,7 @@ pub enum Capability {
 /// where posssible.
 #[non_exhaustive]
 #[derive(Debug)]
-pub enum PhysicalType {
+pub enum DeviceType {
     Keyboard,
     Mouse,
     Pointingstick,
@@ -134,15 +155,36 @@ pub enum Application {
     SystemControl,
 }
 
-/// The [`Device`] struct represents the device and the queriable
-/// information about this device.
+/// The [`Device`] struct represents the device and the queryable
+/// information about this (physical) device.
+///
+/// This is a high-level device and represents the whole physical device.
+/// For example, for a Sony Playstation 5 controller, this represents
+/// the controller which itself has subdevices for the gaming features and
+/// the touchpad (and possibly others). For a Wacom Intuos Pro series tablet
+/// this is a tablet, even though that tablet also has a touchscreen.
 pub struct Device {}
 
 impl Device {
     /// Returns the physical type of this device. Unlike [`Device::has_capability`]
     /// a device is only of one physical type even where it supports multiple different
     /// input methods.
-    pub fn physical_type(self) -> Option<PhysicalType> {
+    pub fn abstract_type(self) -> Option<AbstractType> {
+        None
+    }
+}
+
+/// The [`KernelDevice`] struct represents a single kernel device and
+/// the queryable information about this device.
+pub struct KernelDevice {
+    parent: Option<Device>,  // FIXME: Option for easier prototyping
+}
+
+impl<'a> KernelDevice {
+    /// Return the parent [`Device`] of this kernel device.
+    ///
+    /// FIXME: this is an Option for easier prototyping.
+    pub fn parent(self) -> Option<Device> {
         None
     }
 
@@ -182,7 +224,7 @@ impl Device {
     /// that second caller can reliably recreate the information of this
     /// device even without access to the device itself.
     pub fn deserialize(data: &str) -> Result<Self, Box<dyn Error>> {
-        Ok(Device {})
+        Ok(KernelDevice { parent: None })
     }
 
     // /// Returns a confidence level between `[0.0, 1.0]` on

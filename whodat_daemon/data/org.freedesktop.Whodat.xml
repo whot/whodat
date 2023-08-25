@@ -59,6 +59,10 @@
     @short_description: Device identification interface
 
     An interface to provide information about a device connected to the system.
+
+    This device represents a single kernel device node that a process may have acess too,
+    e.g. an evdev or hidraw node. As such, it may only represent parts of the physical
+    device itself. To obtain information about the physical device, look at the parent device.
   -->
   <interface name="org.freedesktop.Whodat.Device">
     <property name="version" type="u" access="read"/>
@@ -66,6 +70,28 @@
     <property name="bus" type="u" access="read"/>
     <property name="vendor_id" type="u" access="read"/>
     <property name="product_id" type="u" access="read"/>
+    <property name="parent" type="o" access="read"/>
+
+    <!--
+        Removed:
+
+        The Removed signal is emitted when the device has been removed from the system.
+    -->
+    <signal name="Removed">
+    </signal>
+  </interface>
+
+  <!--
+    org.freedesktop.Whodat.PhysicalDevice:
+    @short_description: Device identification interface
+
+    An interface to provide information about a device connected to the system.
+  -->
+  <interface name="org.freedesktop.Whodat.PhysicalDevice">
+    <property name="version" type="u" access="read"/>
+    <!--
+    -->
+    <property name="high_level_type" type="u" access="read"/>
 
     <!--
         Removed:
