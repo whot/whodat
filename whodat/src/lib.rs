@@ -196,6 +196,19 @@ impl<'a> KernelDevice {
         Some(false)
     }
 
+    /// Return the udev `"ID_INPUT_*"` udev properties that are set for this
+    /// kernel device. If the result is an empty vector, no tags are set.
+    ///
+    /// Note that only `ID_INPUT_*` udev properties that are set to a nonzero
+    /// values are listed here - in the niche case of `ID_INPUT_FOO=0` this is
+    /// equivalent to the property being not set.
+    ///
+    /// These tags only apply to evdev devices and for all other kernel
+    /// devices this function returns `None`.
+    pub fn udev_types(self) -> Option<Vec<String>> {
+        None
+    }
+
     // /// Return the HID application this device is mapped to.
     // /// This is a feature of the Linux kernel that HID devices are split
     // /// across various evdev nodes, typically by HID Application. For example
