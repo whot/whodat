@@ -1,5 +1,6 @@
 [workspace]
 members = [
   "whodat",
+  "whodat-cli",
   "whodat_daemon"
 ]
