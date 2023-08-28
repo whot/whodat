@@ -6,3 +6,5 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+evdev = { version="0.12.1", path="../../evdev" }
+udev = "0.7.0"

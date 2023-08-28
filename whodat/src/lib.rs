@@ -1,288 +1,212 @@
 #![doc = include_str!("../../README.md")]
 #![allow(unused_variables, dead_code)]
 
-use std::error::Error;
+use evdev;
+use std::{
+    cmp::PartialEq,
+    collections::HashMap,
+    error::Error,
+    fs::File,
+    hash::{Hash, Hasher},
+    os::fd::OwnedFd,
+    os::linux::fs::MetadataExt,
+    sync::atomic::{AtomicU32, Ordering},
+};
+use udev;
 
-/// The entry point: create a builder with as much information
-/// as possible and create a device from that, then query the
-/// device for the information the caller needs to know.
-///
-/// # Example
-/// ```
-/// use whodat::{Builder, Capability};
-/// if let Ok(device) = Builder::new()
-///                     .name("Sony Playstation Controller")
-///                     .usbid(0x1234, 0x56ab)
-///                     .build() {
-///     match device.has_capability(Capability::Touchpad) {
-///         Some(value) => println!("This device is a touchpad? {}", value),
-///         None => println!("I really don't know what this device is"),
-///     }
-/// }
-/// ```
-///
-/// Note that the order determines the priority, i.e. where
-/// a [`Builder::udev_device`] is given first and the [`Builder::name`] second,
-/// the latter will override the name as queried from the udev device.
-pub struct Builder {}
+mod evdev_device;
+mod hidraw_device;
+mod physical_device;
+mod types;
+mod util;
 
-impl Builder {
-    /// Create a new instance of a [`Builder`].
+pub use evdev_device::EvdevDevice;
+pub use hidraw_device::HidrawDevice;
+pub use physical_device::PhysicalDevice;
+pub use types::{AbstractType, Capability};
+
+// Next device id, see [`DeviceIndex::next`]
+static NEXT_ID: AtomicU32 = AtomicU32::new(1);
+
+/// The generic return type for [`DeviceTree::get_device`].
+#[non_exhaustive]
+#[derive(Debug)]
+pub enum AttachedDevice {
+    Evdev(EvdevDevice),
+    Parent(PhysicalDevice),
+}
+
+impl AttachedDevice {
+    fn set_parent(&mut self, parent: &PhysicalDevice) {
+        match self {
+            AttachedDevice::Evdev(evdev) => {
+                evdev.set_parent(parent);
+            }
+            AttachedDevice::Parent(_) => {
+                panic!("Cannot set a parent to a parent");
+            }
+        }
+    }
+}
+
+/// A unique device index to fetch a device from a [`DeviceTree`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DeviceIndex {
+    idx: u32,
+}
+
+impl DeviceIndex {
+    /// Returns the next available device index.
+    fn next() -> DeviceIndex {
+        DeviceIndex {
+            idx: NEXT_ID.fetch_add(1, Ordering::Relaxed),
+        }
+    }
+}
+
+impl Hash for DeviceIndex {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.idx.hash(state);
+    }
+}
+
+/// A node in the [`DeviceTree`].
+#[derive(Clone, Copy, Debug)]
+struct Node {
+    idx: DeviceIndex,
+    /// Points to the parent device, if any. `None` for [`PhysicalDevice`].
+    parent: Option<DeviceIndex>,
+}
+
+impl Node {
+    fn new() -> Self {
+        Self {
+            idx: DeviceIndex::next(),
+            parent: None,
+        }
+    }
+
+    fn index(&self) -> DeviceIndex {
+        self.idx.clone()
+    }
+
+    pub(crate) fn set_parent(&mut self, parent: DeviceIndex) {
+        self.parent = Some(parent);
+    }
+}
+
+/// The [`DeviceTree`] is the context object that holds all currently
+/// known devices. Devices can be **attached** to the tree,
+/// see [`DeviceTree::attach_evdev`] and are then available via
+/// [`DeviceTree::get_device`].
+///
+/// A device tree builds up information about devices based on the
+/// devices it gets given - where a caller has access to more than one
+/// device it should attach all devices before obtaining information
+/// about any one of those devices.
+#[derive(Debug)]
+pub struct DeviceTree {
+    devices: HashMap<DeviceIndex, AttachedDevice>,
+}
+
+impl DeviceTree {
+    /// Create a new tree with no devices attached.
     pub fn new() -> Self {
-        Builder {}
+        Self {
+            devices: HashMap::new(),
+        }
     }
 
-    /// Set the device name as advertised by the kernel
-    pub fn name(&mut self, name: &str) -> &mut Self {
-        self
+    /// Attach a new evdev device from an open evdev file descriptor that can be
+    /// `ioctl`'d for information. The returned [`DeviceIndex`] can be used to
+    /// obtain the actual [`EvdevDevice`] later, see [`DeviceTree::get_device`]
+    ///
+    /// Where a caller has multiple file descriptors they should be added first
+    /// before calling [`DeviceTree::get_device`] to ensure the resulting device
+    /// is built from the maximum information. Likewise, attaching more devices *may*
+    /// change the information about an already attached device.
+    pub fn attach_evdev(&mut self, fd: OwnedFd) -> Result<DeviceIndex, Box<dyn Error>> {
+        let evdev = EvdevDevice::from_fd(fd)?;
+        let index = evdev.index();
+        let mut attached = AttachedDevice::Evdev(evdev);
+
+        let parent: Option<&mut PhysicalDevice> = self.devices.values_mut().find_map(|d| match d {
+            AttachedDevice::Parent(parent) => {
+                if parent.match_device(&attached) {
+                    Some(parent)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        });
+
+        match parent {
+            Some(parent) => {
+                parent.add_child(&attached);
+                attached.set_parent(&parent);
+            }
+            None => {
+                let mut parent = PhysicalDevice::new();
+                let pindex = parent.index();
+                parent.add_child(&attached);
+                attached.set_parent(&parent);
+                self.devices
+                    .insert(pindex.clone(), AttachedDevice::Parent(parent));
+            }
+        }
+
+        self.devices.insert(index.clone(), attached);
+
+        //println!("Hashmap is {:?}", self.devices);
+
+        Ok(index)
     }
 
-    /// The USB vendor and product ID
-    pub fn usbid(&mut self, vid: u16, pid: u16) -> &mut Self {
-        self
+    /// Given the [`DeviceIndex`] returned by [`DeviceTree::attach_evdev`] return
+    /// that device. This is the generic version that returns the device
+    /// and punts device type detection to the caller. For more specific versions
+    /// see [`DeviceTree::get_evdev_device`] and [`DeviceTree::get_parent_device`].
+    pub fn get_device(&self, idx: &DeviceIndex) -> Option<&AttachedDevice> {
+        self.devices.get(idx).and_then(|x| Some(x))
     }
 
-    /// The udev device representing this device
-    pub fn udev_device(&mut self, path: &str) -> &mut Self {
-        self
-    } // FIXME: needs to be some udev type, not a path
-
-    /// An open evdev file descriptor that can be `ioctl`'d for information
-    pub fn evdev_fd(&mut self, fd: std::os::fd::RawFd) -> &mut Self {
-        self
+    /// Given the [`DeviceIndex`] returned by [`DeviceTree::attach_evdev`] return
+    /// that device if it is indeed an [`EvdevDevice`].
+    pub fn get_evdev_device(&self, idx: &DeviceIndex) -> Option<&EvdevDevice> {
+        let d = self.devices.get(idx)?;
+        match &d {
+            AttachedDevice::Evdev(evdev) => Some(&evdev),
+            _ => None,
+        }
     }
 
-    /// An open hidraw file descriptor that can be `ioctl`'d for information
-    pub fn hidraw_fd(&mut self, fd: std::os::fd::RawFd) -> &mut Self {
-        self
+    /// Given the [`DeviceIndex`] returned by [`DeviceTree::attach_evdev`] return
+    /// that device if it is indeed a [`PhysicalDevice`].
+    pub fn get_parent_device(&self, idx: &DeviceIndex) -> Option<&PhysicalDevice> {
+        let d = self.devices.get(idx)?;
+        match &d {
+            AttachedDevice::Parent(parent) => Some(&parent),
+            _ => None,
+        }
     }
 
-    /// Path to the device's sysfs entry. If this path does not start with `/sys`,
-    /// it is automatically prefixed as such.
-    pub fn sysfs_path(&mut self, path: &str) -> &mut Self {
-        self
-    }
-
-    /// Build the device. If this function returns an error, the provided information
-    /// is insufficient to construct a [`KernelDevice`].
-    pub fn build(&self) -> Result<Box<dyn KernelDevice>, Box<dyn Error>> {
-        Ok(Box::new(EvdevDevice { parent: None }))
+    /// Returns an iterator over all [`AttachedDevice`]s that are part of this tree.
+    pub fn iter(&self) -> impl Iterator<Item=&AttachedDevice> + '_ {
+        self.devices.values()
     }
 }
 
-/// A high-level category describing a capability on this device.
-/// Capabilities are not mutually exclusive (some are, see the documentation for
-/// each capability) and any device may match one or more of those capabilities.
-///
-/// The availability of capabilities depends on how the device was
-/// constructed.
-///
-/// A caller is expected to check the categories they care about
-/// (both for "has" and "has not") and treat the device
-/// accordingly. For example, a caller expecting a mouse should check
-/// that the [`Capability::Pointer`] is present but the
-/// [`Capability::Touchpad`] (amongst others) is not present.
-#[non_exhaustive]
-#[derive(Debug)]
-pub enum Capability {
-    Keyboard,
-    Pointer,
-    Pointingstick,
-    Touchpad,
-    /// A touchpad with a hinge instead of physical, separate buttons. Also called ButtonPads.
-    Clickpad,
-    /// A touchpad without physical buttons that uses physical pressure to detect button
-    /// presses instead of e.g. a mechanical hinge.
-    Pressurepad,
-    Touchscreen,
-    Trackball,
-    Joystick,
-    Gamepad,
-    Tablet,
-    /// A tablet built into a screen, e.g. like the Wacom Cintiq series.
-    /// This capability is mutually exclusive with the [`Capability::TabletExternal`] capability.
-    TabletScreen,
-    /// A tablet external to a device, e.g. like the Wacom Intuos series.
-    /// This capability is mutually exclusive with the [`Capability::TabletScreen`] capability.
-    TabletExternal,
-    /// This device is a tablet pad, i.e. the set of buttons, strips and rings that are available
-    /// on many [`Capability::Tablet`] devices.
-    TabletPad,
-}
-
-/// Describes the primary high-level type of this device.
-///
-/// This is the highest level of categorization and only one of these types
-/// applies to each device. Devices may technically fall into multiple categories
-/// (e.g. many gaming mice can send key events) but this represents the most obvious
-/// category for this device.
-#[non_exhaustive]
-#[derive(Debug)]
-pub enum AbstractType {
-    /// Device is primarily a keyboard
-    Keyboard,
-    /// Device is primarily a pointer device, e.g. a mouse, touchpad, or pointingstick
-    Pointer,
-    /// Device is primarily a touchscreen
-    Touchscreen,
-    /// Device is primarily a graphics tablet
-    Tablet,
-    /// Device is primarily a gaming device, e.g. a joystick, gamepad or racing wheel
-    GamingDevice,
-}
-
-/// Describes the **physical** type of this device. Unlike the [`Device::has_capability`]
-/// a device may only have one physical type. For example, modern PlayStation controllers
-/// provide a touchpad as well as a gamepad - the physical type of this controller however
-/// is [`AbstractType::GamingDevice`].
-///
-/// The physical type of the device may not always be known, especially if the device
-/// is constructed from a single event node via [`Builder::evdev_fd`]. This crate may
-/// rely on an internal database for well-known devices to supplement the information
-/// where posssible.
-#[non_exhaustive]
-#[derive(Debug)]
-pub enum DeviceType {
-    Keyboard,
-    Mouse,
-    Pointingstick,
-    Touchpad,
-    Touchscreen,
-    Trackball,
-    Tablet,
-    Joystick,
-    Gamepad,
-    RacingWheel,
-    FootPedal,
-}
-
-/// The Linux kernel splits HID devices up by application and a single
-/// HID device may result in multiple evdev nodes.
-#[non_exhaustive]
-pub enum Application {
-    Mouse,
-    Touchpad,
-    Keyboard,
-    Keypad,
-    ConsumerControl,
-    SystemControl,
-}
-
-/// The [`KernelDevice`] struct represents a single kernel device that is exposed
-/// via some chardev. See [`HidrawDevice`] and [`EvdevDevice`] for implementations
+/// The [`HasParent`] trait is implemented by devices that have a single parent
+/// device that represents the [`PhysicalDevice`]. See [`HidrawDevice`] and [`EvdevDevice`] for implementations
 /// of this trait.
-pub trait KernelDevice {
-    /// Return the parent [`Device`] of this kernel device.
-    ///
-    /// FIXME: this is an Option for easier prototyping.
-    fn parent(self) -> Option<Device>;
-
-    /// Return a result on whether the device has the given capability.
-    /// If the capability is known or can be guessed, the result is `true`
-    /// or `false`. Otherwise if this cannot be known based on the
-    /// data supplied prior to the device creation, `None` is returned.
-    fn has_capability(self, capability: Capability) -> Option<bool>;
+pub trait HasParent {
+    /// Return the parent [`DeviceIndex`] of this kernel device - use
+    /// with [`DeviceTree::get_device`] to fetch the parent device.
+    fn parent(&self) -> DeviceIndex;
 }
 
-/// The [`Device`] struct represents the device and the queryable
-/// information about this (physical) device.
-///
-/// This is a high-level device and represents the whole physical device.
-/// For example, for a Sony Playstation 5 controller, this represents
-/// the controller which itself has subdevices for the gaming features and
-/// the touchpad (and possibly others). For a Wacom Intuos Pro series tablet
-/// this is a tablet, even though that tablet also has a touchscreen.
-pub struct Device {}
-
-impl Device {
-    /// Returns the physical type of this device. Unlike [`Device::has_capability`]
-    /// a device is only of one physical type even where it supports multiple different
-    /// input methods.
-    pub fn abstract_type(self) -> Option<AbstractType> {
-        None
-    }
-
-    /// Return a result on whether the device has the given capability.
-    /// If the capability is known or can be guessed, the result is `true`
-    /// or `false`. Otherwise if this cannot be known based on the
-    /// data supplied prior to the device creation, `None` is returned.
-    pub fn has_capability(self, capability: Capability) -> Option<bool> {
-        None
-    }
-}
-
-/// The [`EvdevDevice`] struct represents a single kernel device and
-/// the queryable information about this device.
-pub struct EvdevDevice {
-    parent: Option<Device>, // FIXME: Option for easier prototyping
-}
-
-/// The [`HidrawDevice`] struct represents a single kernel device and
-/// the queryable information about this device.
-pub struct HidrawDevice {
-    parent: Option<Device>, // FIXME: Option for easier prototyping
-}
-
-impl KernelDevice for EvdevDevice {
-    /// Return the parent [`Device`] of this kernel device.
-    ///
-    /// FIXME: this is an Option for easier prototyping.
-    fn parent(self) -> Option<Device> {
-        None
-    }
-
-    /// Return a result on whether the device has the given capability.
-    /// If the capability is known or can be guessed, the result is `true`
-    /// or `false`. Otherwise if this cannot be known based on the
-    /// data supplied prior to the device creation, `None` is returned.
-    fn has_capability(self, capability: Capability) -> Option<bool> {
-        Some(false)
-    }
-}
-
-impl KernelDevice for HidrawDevice {
-    /// Return the parent [`Device`] of this kernel device.
-    ///
-    /// FIXME: this is an Option for easier prototyping.
-    fn parent(self) -> Option<Device> {
-        None
-    }
-
-    /// Return a result on whether the device has the given capability.
-    /// If the capability is known or can be guessed, the result is `true`
-    /// or `false`. Otherwise if this cannot be known based on the
-    /// data supplied prior to the device creation, `None` is returned.
-    fn has_capability(self, capability: Capability) -> Option<bool> {
-        Some(false)
-    }
-}
-
-impl EvdevDevice {
-    /// Return the udev `"ID_INPUT_*"` udev properties that are set for this
-    /// kernel device. If the result is an empty vector, no tags are set.
-    ///
-    /// Note that only `ID_INPUT_*` udev properties that are set to a nonzero
-    /// values are listed here - in the niche case of `ID_INPUT_FOO=0` this is
-    /// equivalent to the property being not set.
-    ///
-    /// These tags only apply to evdev devices and for all other kernel
-    /// devices this function returns `None`.
-    pub fn udev_types(self) -> Option<Vec<String>> {
-        None
-    }
-}
-
-impl HidrawDevice {
-    // /// Return the HID application this device is mapped to.
-    // /// This is a feature of the Linux kernel that HID devices are split
-    // /// across various evdev nodes, typically by HID Application. For example
-    // /// a mouse device is often split into a [`Application::Mouse`] and
-    // /// a [`Application::Keyboard`] device.
-    // ///
-    // /// Where a device originates from an evdev node (see [`Builder::evdev_fd`])
-    // /// this function returns the application that the evdev node represents, if any.
-    // /// Otherwise, this function returns None.
-    // pub fn hid_application(self) -> Option<Application> {
-    //     None
-    // }
+pub trait HasCapability {
+    /// Return the set of capabilities of this device.
+    fn capabilities(&self) -> Vec<Capability>;
 }
