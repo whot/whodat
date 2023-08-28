@@ -65,14 +65,14 @@ impl Builder {
 
     /// Build the device. If this function returns an error, the provided information
     /// is insufficient to construct a [`KernelDevice`].
-    pub fn build(&self) -> Result<KernelDevice, Box<dyn Error>> {
-        Ok(KernelDevice { parent: None })
+    pub fn build(&self) -> Result<Box<dyn KernelDevice>, Box<dyn Error>> {
+        Ok(Box::new(EvdevDevice { parent: None }))
     }
 }
 
 /// A high-level category describing a capability on this device.
-/// Capabilities are not mutually exclusive (some are, see the documentation)
-/// and any device may match one or more of those capabilities.
+/// Capabilities are not mutually exclusive (some are, see the documentation for
+/// each capability) and any device may match one or more of those capabilities.
 ///
 /// The availability of capabilities depends on how the device was
 /// constructed.
@@ -89,11 +89,24 @@ pub enum Capability {
     Pointer,
     Pointingstick,
     Touchpad,
+    /// A touchpad with a hinge instead of physical, separate buttons. Also called ButtonPads.
+    Clickpad,
+    /// A touchpad without physical buttons that uses physical pressure to detect button
+    /// presses instead of e.g. a mechanical hinge.
+    Pressurepad,
     Touchscreen,
     Trackball,
     Joystick,
     Gamepad,
     Tablet,
+    /// A tablet built into a screen, e.g. like the Wacom Cintiq series.
+    /// This capability is mutually exclusive with the [`Capability::TabletExternal`] capability.
+    TabletScreen,
+    /// A tablet external to a device, e.g. like the Wacom Intuos series.
+    /// This capability is mutually exclusive with the [`Capability::TabletScreen`] capability.
+    TabletExternal,
+    /// This device is a tablet pad, i.e. the set of buttons, strips and rings that are available
+    /// on many [`Capability::Tablet`] devices.
     TabletPad,
 }
 
@@ -121,7 +134,7 @@ pub enum AbstractType {
 /// Describes the **physical** type of this device. Unlike the [`Device::has_capability`]
 /// a device may only have one physical type. For example, modern PlayStation controllers
 /// provide a touchpad as well as a gamepad - the physical type of this controller however
-/// is [`PhysicalType::Gamepad`].
+/// is [`AbstractType::GamingDevice`].
 ///
 /// The physical type of the device may not always be known, especially if the device
 /// is constructed from a single event node via [`Builder::evdev_fd`]. This crate may
@@ -155,6 +168,22 @@ pub enum Application {
     SystemControl,
 }
 
+/// The [`KernelDevice`] struct represents a single kernel device that is exposed
+/// via some chardev. See [`HidrawDevice`] and [`EvdevDevice`] for implementations
+/// of this trait.
+pub trait KernelDevice {
+    /// Return the parent [`Device`] of this kernel device.
+    ///
+    /// FIXME: this is an Option for easier prototyping.
+    fn parent(self) -> Option<Device>;
+
+    /// Return a result on whether the device has the given capability.
+    /// If the capability is known or can be guessed, the result is `true`
+    /// or `false`. Otherwise if this cannot be known based on the
+    /// data supplied prior to the device creation, `None` is returned.
+    fn has_capability(self, capability: Capability) -> Option<bool>;
+}
+
 /// The [`Device`] struct represents the device and the queryable
 /// information about this (physical) device.
 ///
@@ -172,19 +201,33 @@ impl Device {
     pub fn abstract_type(self) -> Option<AbstractType> {
         None
     }
+
+    /// Return a result on whether the device has the given capability.
+    /// If the capability is known or can be guessed, the result is `true`
+    /// or `false`. Otherwise if this cannot be known based on the
+    /// data supplied prior to the device creation, `None` is returned.
+    pub fn has_capability(self, capability: Capability) -> Option<bool> {
+        None
+    }
 }
 
-/// The [`KernelDevice`] struct represents a single kernel device and
+/// The [`EvdevDevice`] struct represents a single kernel device and
 /// the queryable information about this device.
-pub struct KernelDevice {
-    parent: Option<Device>,  // FIXME: Option for easier prototyping
+pub struct EvdevDevice {
+    parent: Option<Device>, // FIXME: Option for easier prototyping
 }
 
-impl<'a> KernelDevice {
+/// The [`HidrawDevice`] struct represents a single kernel device and
+/// the queryable information about this device.
+pub struct HidrawDevice {
+    parent: Option<Device>, // FIXME: Option for easier prototyping
+}
+
+impl KernelDevice for EvdevDevice {
     /// Return the parent [`Device`] of this kernel device.
     ///
     /// FIXME: this is an Option for easier prototyping.
-    pub fn parent(self) -> Option<Device> {
+    fn parent(self) -> Option<Device> {
         None
     }
 
@@ -192,10 +235,29 @@ impl<'a> KernelDevice {
     /// If the capability is known or can be guessed, the result is `true`
     /// or `false`. Otherwise if this cannot be known based on the
     /// data supplied prior to the device creation, `None` is returned.
-    pub fn has_capability(self, capability: Capability) -> Option<bool> {
+    fn has_capability(self, capability: Capability) -> Option<bool> {
         Some(false)
     }
+}
 
+impl KernelDevice for HidrawDevice {
+    /// Return the parent [`Device`] of this kernel device.
+    ///
+    /// FIXME: this is an Option for easier prototyping.
+    fn parent(self) -> Option<Device> {
+        None
+    }
+
+    /// Return a result on whether the device has the given capability.
+    /// If the capability is known or can be guessed, the result is `true`
+    /// or `false`. Otherwise if this cannot be known based on the
+    /// data supplied prior to the device creation, `None` is returned.
+    fn has_capability(self, capability: Capability) -> Option<bool> {
+        Some(false)
+    }
+}
+
+impl EvdevDevice {
     /// Return the udev `"ID_INPUT_*"` udev properties that are set for this
     /// kernel device. If the result is an empty vector, no tags are set.
     ///
@@ -209,6 +271,17 @@ impl<'a> KernelDevice {
         None
     }
 
+    // /// Returns a confidence level between `[0.0, 1.0]` on
+    // /// how confident we are the classification of this device
+    // /// is correct. This is a summary level, individual capabilities
+    // /// may have different confidence levels but that is hopefully
+    // /// less of an real-world issue than expected.
+    // pub fn confidence(self) -> f32 {
+    //     return 0.0;
+    // }
+}
+
+impl HidrawDevice {
     // /// Return the HID application this device is mapped to.
     // /// This is a feature of the Linux kernel that HID devices are split
     // /// across various evdev nodes, typically by HID Application. For example
@@ -220,14 +293,5 @@ impl<'a> KernelDevice {
     // /// Otherwise, this function returns None.
     // pub fn hid_application(self) -> Option<Application> {
     //     None
-    // }
-
-    // /// Returns a confidence level between `[0.0, 1.0]` on
-    // /// how confident we are the classification of this device
-    // /// is correct. This is a summary level, individual capabilities
-    // /// may have different confidence levels but that is hopefully
-    // /// less of an real-world issue than expected.
-    // pub fn confidence(self) -> f32 {
-    //     return 0.0;
     // }
 }
