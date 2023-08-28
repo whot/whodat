@@ -270,15 +270,6 @@ impl EvdevDevice {
     pub fn udev_types(self) -> Option<Vec<String>> {
         None
     }
-
-    // /// Returns a confidence level between `[0.0, 1.0]` on
-    // /// how confident we are the classification of this device
-    // /// is correct. This is a summary level, individual capabilities
-    // /// may have different confidence levels but that is hopefully
-    // /// less of an real-world issue than expected.
-    // pub fn confidence(self) -> f32 {
-    //     return 0.0;
-    // }
 }
 
 impl HidrawDevice {
